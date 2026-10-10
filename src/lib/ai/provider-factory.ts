@@ -2,6 +2,7 @@ import { OpenAIProvider } from "./providers/openai";
 import { GeminiProvider } from "./providers/gemini";
 import { SeedanceProvider } from "./providers/seedance";
 import { VeoProvider } from "./providers/veo";
+import { GrokVideoProvider } from "./providers/grok-video";
 import { KlingImageProvider } from "./providers/kling-image";
 import { KlingVideoProvider } from "./providers/kling-video";
 import { WanVideoProvider } from "./providers/wan-video";
@@ -62,6 +63,13 @@ export function createAIProvider(config: ProviderConfig, uploadDir?: string): AI
 
 export function createVideoProvider(config: ProviderConfig, uploadDir?: string): VideoProvider {
   switch (config.protocol) {
+    case "grok":
+      return new GrokVideoProvider({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.modelId,
+        ...(uploadDir && { uploadDir }),
+      });
     case "seedance":
       return new SeedanceProvider({
         apiKey: config.apiKey,

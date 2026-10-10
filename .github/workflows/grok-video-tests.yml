@@ -1,0 +1,26 @@
+name: Grok video contract tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:grok-video
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm exec eslint src/lib/ai/providers/grok-video.ts src/lib/ai/provider-factory.ts src/stores/model-store.ts src/components/settings/provider-form.tsx src/app/api/models/list/route.ts

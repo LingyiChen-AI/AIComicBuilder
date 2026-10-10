@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:grok-video": "node --test scripts/test-grok-video.cjs"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.43",
