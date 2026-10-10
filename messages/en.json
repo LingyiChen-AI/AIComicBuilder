@@ -95,7 +95,30 @@
     "kanbanBatchGenerate": "Generate ({count})",
     "continueFromPrev": "Continue from previous",
     "continueFromPrevTooltip": "Use last frame of previous episode as first frame",
-    "prevEpisodeNoFrames": "Previous episode has no generated frames"
+    "prevEpisodeNoFrames": "Previous episode has no generated frames",
+    "addSubtitles": "Add subtitles",
+    "exportTransition": "Between-shot transition",
+    "transitionShot": "Use shot settings",
+    "downloadClips": "Download {count} clips (ZIP)",
+    "exportHint": "Confirm to rebuild the preview below. ZIP preserves original clips, including existing text and effects.",
+    "confirmPreview": "Confirm settings and update preview",
+    "previewUpdating": "Updating preview with current settings…",
+    "previewPending": "Settings changed. Confirm settings and update preview to see the new result.",
+    "previewUpdated": "Preview updated with current settings",
+    "exportTransitions": {
+      "cut": "Hard cut (none)",
+      "fade": "Fade",
+      "dissolve": "Dissolve",
+      "fadeblack": "Fade through black",
+      "fadewhite": "Fade through white",
+      "wipeleft": "Wipe left",
+      "wiperight": "Wipe right",
+      "slideleft": "Slide left",
+      "slideright": "Slide right",
+      "circleopen": "Circle open",
+      "circleclose": "Circle close",
+      "pixelize": "Pixelize"
+    }
   },
   "character": {
     "name": "Character Name",

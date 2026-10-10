@@ -12,6 +12,7 @@ import {
 import { eq, asc, and, or, isNull, desc, inArray } from "drizzle-orm";
 import { getUserIdFromRequest } from "@/lib/get-user-id";
 import { markDownstreamStale } from "@/lib/staleness";
+import { readExportSettings } from "@/lib/video/export-metadata";
 
 async function resolveProjectAndEpisode(
   projectId: string,
@@ -158,6 +159,7 @@ export async function GET(
     script: episode.script,
     status: episode.status,
     finalVideoUrl: episode.finalVideoUrl,
+    finalVideoSettings: readExportSettings(episode.finalVideoUrl),
     generationMode: episode.generationMode,
     characters: epCharacters,
     shots: enrichedShots,

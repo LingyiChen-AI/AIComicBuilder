@@ -15,6 +15,7 @@ import { Loader2, Download, Plus, Eye, EyeOff, Trash2, Search } from "lucide-rea
 
 const DEFAULT_BASE_URLS: Record<Protocol, string> = {
   openai: "https://api.openai.com",
+  grok: "https://api.x.ai",
   gemini: "https://generativelanguage.googleapis.com",
   seedance: "https://ark.cn-beijing.volces.com",
   "ucloud-seedance": "https://api.modelverse.cn",
@@ -40,6 +41,7 @@ function getProtocolOptions(capability: Capability): { value: Protocol; label: s
   }
   // video
   return [
+    { value: "grok", label: "Grok (xAI)" },
     { value: "seedance", label: "Seedance" },
     { value: "ucloud-seedance", label: "Seedance (UCloud)" },
     { value: "gemini", label: "Gemini (Veo)" },
@@ -119,7 +121,7 @@ export function ProviderForm({ provider }: ProviderFormProps) {
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">{t("protocol")}</Label>
-          <div className="flex gap-1.5 pt-0.5">
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
             {getProtocolOptions(provider.capability).map((opt) => (
               <button
                 key={opt.value}

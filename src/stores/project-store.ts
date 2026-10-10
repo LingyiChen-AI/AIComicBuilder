@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { apiFetch } from "@/lib/api-fetch";
+import type { PreviewSettings } from "@/lib/video/preview-update";
 
 interface Character {
   id: string;
@@ -200,6 +201,7 @@ interface Project {
   outline?: string;
   status: string;
   finalVideoUrl: string | null;
+  finalVideoSettings?: PreviewSettings | null;
   generationMode: "keyframe" | "reference";
   characters: Character[];
   shots: Shot[];

@@ -5,9 +5,11 @@ import { id as genId } from "@/lib/id";
 
 const uploadDir = process.env.UPLOAD_DIR || "./uploads";
 
-type TransitionType = "cut" | "dissolve" | "fade_in" | "fade_out" | "wipeleft" | "slideright" | "circleopen";
+import { transitionOverlap, type TransitionType } from "./export-options";
+import { probeVideo, renderTransitions } from "./transition-render";
 
-const DEFAULT_XFADE_DURATION = 0.5;
+if (process.env.FFMPEG_PATH) ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
+if (process.env.FFPROBE_PATH) ffmpeg.setFfprobePath(process.env.FFPROBE_PATH);
 
 interface SubtitleEntry {
   text: string;
@@ -28,6 +30,7 @@ interface AssembleParams {
   creditsCard?: { text: string; duration: number };
   bgmPath?: string;
   bgmVolume?: number; // 0.0-1.0, default 0.3
+  subtitlesEnabled?: boolean;
 }
 
 interface AssembleResult {
@@ -69,7 +72,8 @@ export async function generateTitleCard(
 function generateSrtFile(
   subtitles: SubtitleEntry[],
   shotDurations: number[],
-  outputPath: string
+  outputPath: string,
+  transitions: TransitionType[] = [],
 ): string {
   const srtPath = outputPath.replace(/\.mp4$/, ".srt");
 
@@ -77,7 +81,8 @@ function generateSrtFile(
   let cumulative = 0;
   for (const duration of shotDurations) {
     shotStartTimes.push(cumulative);
-    cumulative += duration;
+    const i = shotStartTimes.length - 1;
+    cumulative += duration - (i < shotDurations.length - 1 ? transitionOverlap(transitions[i] ?? "cut", duration, shotDurations[i + 1]) : 0);
   }
 
   const srtEntries: string[] = [];
@@ -104,6 +109,9 @@ function generateSrtFile(
       endTime = startTime + segmentDur;
     }
 
+    if (shotIdx > 0) startTime = Math.max(startTime, shotStart + transitionOverlap(transitions[shotIdx - 1] ?? "cut", shotDurations[shotIdx - 1], shotDur) / 2);
+    if (shotIdx < shotDurations.length - 1) endTime = Math.min(endTime, shotStart + shotDur - transitionOverlap(transitions[shotIdx] ?? "cut", shotDur, shotDurations[shotIdx + 1]) / 2);
+    if (endTime <= startTime) continue;
     srtEntries.push(
       `${index}\n${formatSrtTime(startTime)} --> ${formatSrtTime(endTime)}\n${sub.text}\n`
     );
@@ -127,117 +135,11 @@ function escapeSubtitlePath(p: string): string {
   return p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "'\\''");
 }
 
-/** Map our transition type to ffmpeg xfade transition name */
-function mapTransitionName(t: TransitionType): string {
-  if (t === "fade_in" || t === "fade_out") return "fade";
-  return t;
-}
-
-/**
- * Concatenate videos with optional xfade transitions.
- * Returns the path to the concatenated output file.
- */
-async function concatWithTransitions(
-  videoPaths: string[],
-  transitions: TransitionType[],
-  shotDurations: number[],
-  outputPath: string,
-  projectId: string,
-  outputDir: string,
-): Promise<void> {
-  // Single video: just copy
-  if (videoPaths.length === 1) {
-    fs.copyFileSync(path.resolve(videoPaths[0]), outputPath);
-    return;
-  }
-
-  // All cuts: use fast concat demuxer
-  const allCuts = transitions.every((t) => t === "cut");
-  if (allCuts) {
-    const concatListPath = path.resolve(outputDir, `${projectId}-concat.txt`);
-    const concatContent = videoPaths
-      .map((p) => `file '${path.resolve(p)}'`)
-      .join("\n");
-    fs.writeFileSync(concatListPath, concatContent);
-
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg()
-        .input(concatListPath)
-        .inputOptions(["-f", "concat", "-safe", "0"])
-        .outputOptions(["-c", "copy"])
-        .output(outputPath)
-        .on("end", () => {
-          fs.unlinkSync(concatListPath);
-          resolve();
-        })
-        .on("error", (err) => {
-          reject(new Error(`FFmpeg concat failed: ${err.message}`));
-        })
-        .run();
-    });
-    return;
-  }
-
-  // Mixed transitions: use xfade filter chain
-  const cmd = ffmpeg();
-  for (const vp of videoPaths) {
-    cmd.input(path.resolve(vp));
-  }
-
-  // Build xfade filter chain
-  const filterParts: string[] = [];
-  let prevLabel = "0:v";
-  let cumulativeOffset = 0;
-
-  for (let i = 0; i < transitions.length; i++) {
-    const t = transitions[i];
-    const duration = shotDurations[i];
-    const outLabel = i < transitions.length - 1 ? `v${i}` : "vout";
-
-    if (t === "cut") {
-      // For cut: use xfade with duration=0 to simulate hard cut
-      const offset = cumulativeOffset + duration;
-      filterParts.push(
-        `[${prevLabel}][${i + 1}:v]xfade=transition=fade:duration=0:offset=${offset.toFixed(3)}[${outLabel}]`
-      );
-      cumulativeOffset = offset;
-    } else {
-      const xfadeDur = DEFAULT_XFADE_DURATION;
-      const offset = cumulativeOffset + duration - xfadeDur;
-      const xfadeName = mapTransitionName(t);
-      filterParts.push(
-        `[${prevLabel}][${i + 1}:v]xfade=transition=${xfadeName}:duration=${xfadeDur}:offset=${offset.toFixed(3)}[${outLabel}]`
-      );
-      cumulativeOffset = offset;
-    }
-
-    prevLabel = outLabel;
-  }
-
-  const complexFilter = filterParts.join(";");
-
-  await new Promise<void>((resolve, reject) => {
-    cmd
-      .complexFilter(complexFilter, "vout")
-      .outputOptions([
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-an",
-      ])
-      .output(outputPath)
-      .on("end", () => resolve())
-      .on("error", (err) => {
-        reject(new Error(`FFmpeg xfade concat failed: ${err.message}`));
-      })
-      .run();
-  });
-}
-
 export async function assembleVideo(params: AssembleParams): Promise<AssembleResult> {
   const { subtitles, projectId } = params;
   const allPaths = [...params.videoPaths];
-  const allDurations = [...params.shotDurations];
+  if (!allPaths.length) throw new Error("No video clips to assemble");
+  const allDurations = (await Promise.all(allPaths.map(probeVideo))).map(info => info.duration);
 
   const outputDir = path.resolve(uploadDir, "videos");
   fs.mkdirSync(outputDir, { recursive: true });
@@ -264,19 +166,21 @@ export async function assembleVideo(params: AssembleParams): Promise<AssembleRes
     allDurations.push(params.creditsCard.duration);
   }
 
-  const transitions: TransitionType[] = params.transitions
-    ?? new Array(Math.max(allPaths.length - 1, 0)).fill("cut");
+  const transitions: TransitionType[] = [...(params.transitions ?? new Array(Math.max(params.videoPaths.length - 1, 0)).fill("cut"))];
+  if (params.titleCard) transitions.unshift("cut");
+  if (params.creditsCard) transitions.push("cut");
+  if (transitions.length !== allPaths.length - 1) throw new Error("Transition count must match clip boundaries");
 
   const concatOutputPath = path.resolve(outputDir, `${projectId}-concat-${genId()}.mp4`);
   const outputPath = path.resolve(outputDir, `${projectId}-final-${genId()}.mp4`);
 
   // Step 1: Concatenate video clips (with transitions)
-  await concatWithTransitions(allPaths, transitions, allDurations, concatOutputPath, projectId, outputDir);
+  await renderTransitions(allPaths, transitions, allDurations, concatOutputPath);
 
   // Step 2: Burn in subtitles if any
   let srtPath: string | undefined;
-  if (subtitles.length > 0) {
-    srtPath = generateSrtFile(subtitles, allDurations, outputPath);
+  if (params.subtitlesEnabled !== false && subtitles.length > 0) {
+    srtPath = generateSrtFile(subtitles.map(s => ({ ...s, shotSequence: s.shotSequence + (params.titleCard ? 1 : 0) })), allDurations, outputPath, transitions);
     const escapedSrtPath = escapeSubtitlePath(path.resolve(srtPath));
 
     try {
@@ -303,9 +207,7 @@ export async function assembleVideo(params: AssembleParams): Promise<AssembleRes
           .run();
       });
     } catch (err) {
-      // Fallback: skip subtitle burn, use concat output directly
-      console.warn(`[FFmpeg] Subtitle burn failed, using concat output: ${err}`);
-      fs.renameSync(concatOutputPath, outputPath);
+      throw new Error(`Subtitle burn failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   } else {
     // No subtitles, just rename

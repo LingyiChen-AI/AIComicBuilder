@@ -24,21 +24,29 @@ import {
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-fetch";
 import { toast } from "sonner";
+import { TRANSITIONS } from "@/lib/video/export-options";
+import { confirmPreview } from "@/lib/video/preview-update";
 
 export default function EpisodePreviewPage() {
   const t = useTranslations();
-  const { project, fetchProject } = useProjectStore();
+  const { project, fetchProject, setProject } = useProjectStore();
   const searchParams = useSearchParams();
-  const params = useParams<{ id: string }>();
+  const params = useParams<{ id: string; episodeId: string }>();
   const versionId = searchParams.get("versionId");
 
   useEffect(() => {
     if (versionId && params?.id) {
-      fetchProject(params.id, undefined, versionId);
+      fetchProject(params.id, params.episodeId, versionId);
     }
-  }, [versionId, params?.id, fetchProject]);
+  }, [versionId, params?.id, params?.episodeId, fetchProject]);
 
   const [assembling, setAssembling] = useState(false);
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [transition, setTransition] = useState("shot");
+  const [downloading, setDownloading] = useState(false);
+  const [previewPending, setPreviewPending] = useState(false);
+  const [playerRevision, setPlayerRevision] = useState(0);
+  const hydratedScope = useRef("");
   const [selectedShot, setSelectedShot] = useState(0);
   const [videoValid, setVideoValid] = useState<boolean | null>(null);
   const checkedUrl = useRef<string | null>(null);
@@ -52,11 +60,21 @@ export default function EpisodePreviewPage() {
   const hasBothModes = hasKeyframeVideos && hasReferenceVideos;
 
   const [previewMode, setPreviewMode] = useState<"keyframe" | "reference">(generationMode);
-
-  // Sync previewMode when project loads
+  const settingsStorageKey = `video-preview:${params.id}:${params.episodeId}:${versionId || "latest"}`;
   useEffect(() => {
-    if (project) setPreviewMode(project.generationMode ?? "keyframe");
-  }, [project?.generationMode]);
+    const scope = `${settingsStorageKey}:${finalVideoUrl || ""}`;
+    if (!project || hydratedScope.current === scope) return;
+    hydratedScope.current = scope;
+    setPreviewPending(false);
+    setSubtitlesEnabled(true);
+    setTransition("shot");
+    setPreviewMode(project.generationMode ?? "keyframe");
+    if (project.finalVideoSettings) {
+      setSubtitlesEnabled(project.finalVideoSettings.subtitlesEnabled);
+      setTransition(project.finalVideoSettings.transition);
+      setPreviewMode(project.finalVideoSettings.mode);
+    }
+  }, [project, settingsStorageKey, finalVideoUrl]);
 
   // Check if final video file actually exists
   useEffect(() => {
@@ -80,25 +98,27 @@ export default function EpisodePreviewPage() {
   const allShotsHaveVideo = project.shots.length > 0 && project.shots.every((s) => getVideoUrl(s));
   const completedVideos = shotsWithVideo.length;
   const currentShot = shotsWithVideo[selectedShot];
-  const hasValidVideo = finalVideoUrl && videoValid === true;
+  const hasValidVideo = finalVideoUrl && videoValid === true && !previewPending && !assembling;
 
   async function handleAssemble() {
     if (!project) return;
     setAssembling(true);
-    checkedUrl.current = null;
     try {
-      const res = await apiFetch(`/api/projects/${project.id}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "video_assemble", payload: versionId ? { versionId } : undefined, episodeId: useProjectStore.getState().currentEpisodeId }),
-      });
-      await res.json();
+      const record = await confirmPreview({ versionId: versionId || undefined, subtitlesEnabled, transition, mode: previewMode }, async settings => {
+        const res = await apiFetch(`/api/projects/${project.id}/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "video_assemble", payload: settings, episodeId: params.episodeId }) });
+        return res.json();
+      }, async outputPath => (await fetch(uploadUrl(outputPath), { method: "HEAD", cache: "no-store" })).ok);
+      setProject({ ...project, finalVideoUrl: record.outputPath, finalVideoSettings: record.settings });
+      checkedUrl.current = record.outputPath;
+      setVideoValid(true);
+      setPlayerRevision(value => value + 1);
+      setPreviewPending(false);
+      toast.success(t("project.previewUpdated"));
     } catch (err) {
       console.error("Video assemble error:", err);
-      toast.error(t("common.generationFailed"));
+      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
     }
-    setAssembling(false);
-    await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
+    finally { setAssembling(false); }
   }
 
   function handleDownload() {
@@ -109,8 +129,27 @@ export default function EpisodePreviewPage() {
     a.click();
   }
 
+  async function handleDownloadClips() {
+    if (!project) return;
+    setDownloading(true);
+    try {
+      const query = new URLSearchParams({ mode: previewMode });
+      if (versionId) query.set("versionId", versionId);
+      const response = await apiFetch(`/api/projects/${project.id}/episodes/${params.episodeId}/download-videos?${query}`);
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${project.title || "video"}-clips.zip`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.generationFailed"));
+    } finally { setDownloading(false); }
+  }
+
   function handleModeSwitch(mode: "keyframe" | "reference") {
     setPreviewMode(mode);
+    setPreviewPending(true);
     setSelectedShot(0);
   }
 
@@ -134,7 +173,11 @@ export default function EpisodePreviewPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={handleDownloadClips} disabled={downloading || !allShotsHaveVideo} size="sm" variant="outline">
+            <Download className="h-3.5 w-3.5" />
+            {downloading ? t("common.generating") : t("project.downloadClips", { count: completedVideos })}
+          </Button>
           {hasValidVideo && (
             <Button onClick={handleDownload} size="sm" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-100">
               <Download className="h-3.5 w-3.5" />
@@ -143,7 +186,7 @@ export default function EpisodePreviewPage() {
           )}
           <Button
             onClick={handleAssemble}
-            disabled={assembling}
+            disabled={assembling || !allShotsHaveVideo}
             size="sm"
           >
             {assembling ? (
@@ -156,11 +199,31 @@ export default function EpisodePreviewPage() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-5 rounded-xl border border-[--border-subtle] bg-white p-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={subtitlesEnabled} disabled={assembling} onChange={event => { setSubtitlesEnabled(event.target.checked); setPreviewPending(true); }} />
+          {t("project.addSubtitles")}
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          {t("project.exportTransition")}
+          <select className="rounded-lg border p-2" value={transition} disabled={assembling} onChange={event => { setTransition(event.target.value); setPreviewPending(true); }}>
+            <option value="shot">{t("project.transitionShot")}</option>
+            {TRANSITIONS.map(value => <option key={value} value={value}>{t(`project.exportTransitions.${value}`)}</option>)}
+          </select>
+        </label>
+        <p className="text-xs text-[--text-muted]">{t("project.exportHint")}</p>
+        <Button onClick={handleAssemble} disabled={assembling || !allShotsHaveVideo} size="sm">
+          {assembling ? t("project.previewUpdating") : t("project.confirmPreview")}
+        </Button>
+      </div>
+      {(previewPending || assembling) && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{assembling ? t("project.previewUpdating") : t("project.previewPending")}</div>}
+
       {/* Mode switcher — only shown when both modes have videos */}
       {hasBothModes && (
         <div className="flex items-center gap-1 rounded-xl border border-[--border-subtle] bg-[--surface] p-1 w-fit">
           <button
             onClick={() => handleModeSwitch("keyframe")}
+            disabled={assembling}
             className={cn(
               "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150",
               previewMode === "keyframe"
@@ -172,6 +235,7 @@ export default function EpisodePreviewPage() {
           </button>
           <button
             onClick={() => handleModeSwitch("reference")}
+            disabled={assembling}
             className={cn(
               "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150",
               previewMode === "reference"
@@ -189,7 +253,8 @@ export default function EpisodePreviewPage() {
         <div className="space-y-3">
           <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-black shadow-2xl shadow-black/40">
             <video
-              key={finalVideoUrl!}
+              key={`${finalVideoUrl}:${playerRevision}`}
+              aria-label={t("project.finalVideo")}
               controls
               autoPlay
               className="aspect-video w-full"
@@ -210,7 +275,7 @@ export default function EpisodePreviewPage() {
             <video
               key={currentShot.id + previewMode}
               controls
-              autoPlay={!hasValidVideo}
+              autoPlay={!finalVideoUrl && !previewPending && !assembling}
               className="aspect-video w-full"
               src={uploadUrl(getVideoUrl(currentShot)!)}
             />

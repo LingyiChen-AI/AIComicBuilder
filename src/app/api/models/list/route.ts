@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { normalizeGrokBaseUrl } from "@/lib/ai/providers/grok-video";
 
 interface ListRequest {
   protocol: string;
@@ -12,7 +13,7 @@ interface ModelItem {
 }
 
 function buildModelsUrl(baseUrl: string): string {
-  let url = baseUrl.replace(/\/+$/, "");
+  const url = baseUrl.replace(/\/+$/, "");
   // If baseUrl already ends with /v1, don't duplicate
   if (url.endsWith("/v1")) {
     return url + "/models";
@@ -124,6 +125,19 @@ export async function POST(request: Request) {
     }
     if (!body.apiKey) {
       return NextResponse.json({ error: "API Key is required" }, { status: 400 });
+    }
+
+    if (body.protocol === "grok") {
+      const res = await fetch(`${normalizeGrokBaseUrl(body.baseUrl)}/models`, {
+        headers: { Authorization: `Bearer ${body.apiKey}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) throw new Error(`Grok model list failed: HTTP ${res.status}`);
+      const data = await res.json() as { data?: { id: string }[] };
+      if (!Array.isArray(data.data)) throw new Error("Unexpected Grok model list response");
+      const models = data.data.filter(m => typeof m.id === "string" && /(?:^|\/)grok-(?:imagine-)?video(?:-|$)/.test(m.id))
+        .map(m => ({ id: m.id, name: m.id }));
+      return NextResponse.json({ models });
     }
 
     const models = body.protocol === "gemini"
